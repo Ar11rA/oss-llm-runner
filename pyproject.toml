@@ -9,10 +9,13 @@ dependencies = [
     "datasets>=4.4.2",
     "matplotlib>=3.10.8",
     "numpy>=2.4.0",
+    "peft>=0.18.0",
     "scikit-learn>=1.8.0",
     "seaborn>=0.13.2",
     "tensorflow>=2.20.0",
+    "tf-keras>=2.20.1",
     "tokenizers>=0.22.1",
     "torch>=2.9.1",
     "transformers>=4.57.3",
+    "trl>=0.26.2",
 ]
