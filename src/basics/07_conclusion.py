@@ -55,14 +55,11 @@ print("Multi-head attention shape:", attn_scores.shape)
 print("Multi-head attention:\n", attn_scores.numpy())
 
 # masking for causal attention
-mask = tf.linalg.band_part(tf.ones((1, 1, seq_len, seq_len)), -1, 0)
-print("Mask shape:", mask.shape)
-print("Mask:\n", mask.numpy())
-
 output_masked, attn_scores_masked = mha(
-    X, X, mask=mask, return_attention_scores=True
+    X, X, use_causal_mask=True, return_attention_scores=True
 )
 
 print("Masked output shape:", output_masked.shape)
 print("Masked output:\n", output_masked.numpy())
 print("Masked attention shape:", attn_scores_masked.shape)
+print("Masked attention:\n", attn_scores_masked.numpy())

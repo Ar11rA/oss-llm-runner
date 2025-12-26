@@ -61,7 +61,9 @@ def attention_block(X):
 attn_output, attn_weights = attention_block(X)
 
 sentence_repr = tf.reduce_mean(attn_output, axis=1)
-print(sentence_repr.shape)  # (2, 4)
+print("Sentence representation shape:", sentence_repr.shape)
+print("Sentence representation:", sentence_repr)
+
 
 def loss_fn(repr):
     return tf.reduce_mean(tf.square(repr[0] - repr[1]))

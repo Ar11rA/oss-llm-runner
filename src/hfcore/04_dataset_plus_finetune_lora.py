@@ -2,7 +2,7 @@
 Fine-tuning with LoRA (Low-Rank Adaptation)
 
 LoRA drastically reduces trainable parameters:
-- Full fine-tuning: ~4B params
+- Full fine-tuning: ~0.6B params
 - LoRA fine-tuning: ~1-10M params (0.1% of model)
 
 This makes fine-tuning possible on consumer hardware.
@@ -44,7 +44,7 @@ print(f"Formatted dataset sample:\n{formatted_dataset['train'][0]['text'][:300]}
 # ============================================================================
 # 3. Load Model and Tokenizer
 # ============================================================================
-model_id = "Qwen/Qwen3-4B"  # 4B parameter model
+model_id = "Qwen/Qwen3-0.6B"  # 0.6B parameter model
 
 # Detect device
 if torch.backends.mps.is_available():
@@ -122,7 +122,7 @@ model.print_trainable_parameters()
 # 5. Training Configuration
 # ============================================================================
 training_args = SFTConfig(
-    output_dir="./output_models/qwen3-4b-medical-lora",
+    output_dir="./output_models/qwen3-0.6b-medical-lora",
     
     # Batch size settings
     per_device_train_batch_size=2,
@@ -192,8 +192,8 @@ trainer.train()
 # 8. Save the LoRA Adapter
 # ============================================================================
 print("\nSaving LoRA adapter...")
-model.save_pretrained("./output_models/qwen3-4b-medical-lora/final")
-tokenizer.save_pretrained("./output_models/qwen3-4b-medical-lora/final")
+model.save_pretrained("./output_models/qwen3-0.6b-medical-lora/final")
+tokenizer.save_pretrained("./output_models/qwen3-0.6b-medical-lora/final")
 
 print("Training complete!")
 
@@ -210,10 +210,10 @@ print("="*60)
 from peft import PeftModel
 
 # Load base model
-base_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-4B")
+base_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B")
 
 # Load LoRA adapter
-model = PeftModel.from_pretrained(base_model, "./output_models/qwen3-4b-medical-lora/final")
+model = PeftModel.from_pretrained(base_model, "./output_models/qwen3-0.6b-medical-lora/final")
 
 # Merge for faster inference (optional)
 model = model.merge_and_unload()
