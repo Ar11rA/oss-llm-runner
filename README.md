@@ -129,7 +129,10 @@ llm_deeper/
 │       ├── 03_server.py           # FastAPI server
 │       ├── 04_tool_calling_basic.py
 │       ├── 05_tool_calling_advanced.py
-│       └── 07_vllm_cuda_plus_tools.py
+│       ├── 07_vllm_cuda_plus_tools.py
+│       ├── 08_deepseek_example.py # DeepSeek R1 reasoning
+│       ├── 09_mistral_example.py  # Large model w/ FP8
+│       └── 10_diffuser_image.py   # Image generation (SD3.5)
 │
 ├── docs/                          # Detailed documentation
 │   ├── 00_overview.md             # Project overview
@@ -224,6 +227,27 @@ uv run python -m mlx_lm.server --model ./merged-model --port 8000
 
 ```bash
 vllm serve Qwen/Qwen3-0.6B --enable-lora --lora-modules medical=./adapter
+```
+
+### Reasoning Models (DeepSeek R1)
+
+```python
+# R1 models use <think>...</think> tokens for chain-of-thought
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="deepseek-ai/DeepSeek-R1-Distill-Qwen-14B", enforce_eager=True)
+outputs = llm.generate(["Explain quantum computing"], SamplingParams(max_tokens=3000))
+```
+
+### Large Models with Quantization
+
+```python
+# 24B model on 40GB GPU using FP8
+llm = LLM(
+    model="mistralai/Devstral-Small-2-24B-Instruct-2512",
+    quantization="fp8",  # 50% memory savings
+    max_model_len=4096,
+)
 ```
 
 ### API Call

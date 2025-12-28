@@ -255,7 +255,10 @@ Week 3+: Production (src/inferencing_and_advanced/)
 ├── 03_server.py          - FastAPI server
 ├── 04_tool_calling_basic.py - Function calling ⭐
 ├── 05_tool_calling_advanced.py - Advanced patterns
-└── 07_vllm_cuda_plus_tools.py - Production vLLM ⭐⭐
+├── 07_vllm_cuda_plus_tools.py - Production vLLM ⭐⭐
+├── 08_deepseek_example.py - DeepSeek R1 reasoning ⭐
+├── 09_mistral_example.py  - Large model with FP8 ⭐
+└── 10_diffuser_image.py   - Image generation 🎨
 ```
 
 ⭐ = Highly recommended
@@ -300,6 +303,9 @@ Week 3+: Production (src/inferencing_and_advanced/)
 | `04_tool_calling_basic.py` | Function calling | Tool schemas |
 | `05_tool_calling_advanced.py` | Advanced patterns | Multi-turn, registry |
 | `07_vllm_cuda_plus_tools.py` | Production vLLM | CUDA, KV cache |
+| `08_deepseek_example.py` | DeepSeek R1 reasoning | Thinking tokens, chat template |
+| `09_mistral_example.py` | Mistral Devstral 24B | FP8 quantization, code generation |
+| `10_diffuser_image.py` | Image generation | Stable Diffusion 3.5, diffusers |
 
 ---
 

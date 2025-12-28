@@ -13,7 +13,10 @@ This document covers deploying LLMs to production: vLLM for high-performance ser
 5. [Cloud Deployment Options](#cloud-deployment-options)
 6. [Production Architecture](#production-architecture)
 7. [Optimization Techniques](#optimization-techniques)
-8. [Code Walkthrough](#code-walkthrough)
+8. [Reasoning Models (DeepSeek R1)](#reasoning-models-deepseek-r1)
+9. [Large Models with Quantization](#large-models-with-quantization)
+10. [Image Generation (Diffusers)](#image-generation-diffusers)
+11. [Code Walkthrough](#code-walkthrough)
 
 ---
 
@@ -491,6 +494,305 @@ Continuous:     Req1 joins → Req2 joins mid-generation → Req1 leaves
 
 ---
 
+## Reasoning Models (DeepSeek R1)
+
+### What are Reasoning Models?
+
+DeepSeek R1 and similar models use **chain-of-thought reasoning** with explicit `<think>...</think>` tokens:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    DeepSeek R1 Reasoning Flow                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   User: "Code to check if number is prime"                                  │
+│            │                                                                │
+│            ▼                                                                │
+│   ┌────────────────────────────────────────────────────────────────────┐   │
+│   │ <think>                                                            │   │
+│   │ Okay, I need to write a function to check if a number is prime.   │   │
+│   │ A prime is only divisible by 1 and itself. I should:              │   │
+│   │ 1. Handle edge cases (n < 2 → False)                              │   │
+│   │ 2. Check divisibility up to sqrt(n) for efficiency               │   │
+│   │ 3. Special case for 2 (only even prime)                          │   │
+│   │ ...                                                                │   │
+│   │ </think>                                     [500-2000 tokens!]   │   │
+│   └────────────────────────────────────────────────────────────────────┘   │
+│            │                                                                │
+│            ▼                                                                │
+│   def is_prime(n):          ← Actual answer after thinking                 │
+│       if n < 2: return False                                                │
+│       ...                                                                   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Token Budget for Reasoning
+
+| Task Complexity | Thinking Tokens | Answer Tokens | Total Needed |
+|-----------------|-----------------|---------------|--------------|
+| Simple code | 500-1000 | 200 | ~1500 |
+| Medium problem | 1000-2000 | 500 | ~3000 |
+| Complex reasoning | 2000-4000 | 1000 | ~5000 |
+| Math proofs | 3000-6000 | 500 | ~7000 |
+
+### DeepSeek R1 Example
+
+```python
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+# Load model
+tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-14B")
+model = AutoModelForCausalLM.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-14B")
+
+# Format with chat template
+messages = [{"role": "user", "content": "What is 25 * 47?"}]
+inputs = tokenizer.apply_chat_template(
+    messages,
+    add_generation_prompt=True,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="pt",
+).to(model.device)
+
+# Generate with enough tokens for thinking + answer
+outputs = model.generate(**inputs, max_new_tokens=2000)
+response = tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1]:])
+
+# Extract just the answer (after </think>)
+if "</think>" in response:
+    answer = response.split("</think>")[-1].strip()
+else:
+    answer = response
+print(answer)
+```
+
+### vLLM with R1 Models
+
+```python
+import os
+os.environ["VLLM_USE_V1"] = "0"
+
+from vllm import LLM, SamplingParams
+
+llm = LLM(
+    model="deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+    enforce_eager=True,
+    gpu_memory_utilization=0.9,
+    max_model_len=8192,  # Reduced from 131k default
+)
+
+params = SamplingParams(
+    temperature=0.7,
+    max_tokens=3000,  # Enough for thinking + answer
+)
+
+outputs = llm.generate(["Explain quantum entanglement"], params)
+full_response = outputs[0].outputs[0].text
+
+# Parse out the thinking vs answer
+if "</think>" in full_response:
+    thinking = full_response.split("</think>")[0].replace("<think>", "")
+    answer = full_response.split("</think>")[1]
+    print(f"Thinking: {len(thinking.split())} words")
+    print(f"Answer: {answer}")
+```
+
+---
+
+## Large Models with Quantization
+
+### When to Use FP8/INT8/INT4
+
+| Model Size | GPU VRAM | FP16 Fits? | Solution |
+|------------|----------|------------|----------|
+| 7B | 16 GB | ✅ Yes (14 GB) | Direct |
+| 14B | 16 GB | ❌ No (28 GB) | INT8/INT4 |
+| 24B | 40 GB | ❌ No (48 GB) | FP8 |
+| 33B | 40 GB | ❌ No (66 GB) | INT4 |
+| 70B | 80 GB | ❌ No (140 GB) | INT4 or 2× GPU |
+
+### FP8 Quantization (Best Quality)
+
+FP8 preserves more precision than INT8 while using the same memory:
+
+```python
+import os
+os.environ["VLLM_USE_V1"] = "0"
+
+from vllm import LLM, SamplingParams
+
+# 24B model on 40GB GPU with FP8
+llm = LLM(
+    model="mistralai/Devstral-Small-2-24B-Instruct-2512",
+    enforce_eager=True,
+    gpu_memory_utilization=0.9,
+    max_model_len=4096,
+    dtype="float16",       # Load weights in FP16
+    quantization="fp8",    # Quantize to FP8 for inference
+)
+
+# Code generation with system prompt
+messages = [
+    {
+        "role": "system",
+        "content": "You are a Python programmer. Output ONLY code, no explanations."
+    },
+    {
+        "role": "user",
+        "content": "Code to check if number is prime"
+    }
+]
+
+params = SamplingParams(temperature=0.2, max_tokens=500)
+outputs = llm.chat([messages], params)
+print(outputs[0].outputs[0].text)
+```
+
+### Memory Comparison
+
+```
+24B Model on 40GB GPU:
+
+FP16:    [========================X] 48 GB ← DOESN'T FIT
+          ▲
+          └── Needs 48 GB, GPU only has 40 GB
+
+FP8:     [===================     ] 24 GB ← FITS!
+          ▲
+          └── 50% memory reduction
+
+INT4:    [=========                ] 12 GB ← Easily fits
+          ▲
+          └── 75% memory reduction (some quality loss)
+```
+
+### Model Architecture from config.json
+
+You can find layer/hidden size info for any model:
+
+```python
+from transformers import AutoConfig
+
+config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-14B")
+
+print(f"Layers: {config.num_hidden_layers}")            # 40
+print(f"Hidden size: {config.hidden_size}")             # 5120
+print(f"KV heads: {config.num_key_value_heads}")        # 8 (GQA)
+print(f"Max context: {config.max_position_embeddings}") # 131072
+```
+
+This helps calculate KV cache memory:
+
+```
+KV Cache = 2 × layers × (hidden / heads × kv_heads) × seq_len × 2 bytes
+
+For 14B model, 8k context:
+= 2 × 40 × (5120/40 × 8) × 8192 × 2
+= 2 × 40 × 1024 × 8192 × 2
+≈ 1.3 GB
+```
+
+---
+
+## Image Generation (Diffusers)
+
+### What is Diffusion?
+
+Diffusion models generate images by learning to reverse a noise-adding process:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Diffusion Process                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   FORWARD (Training): Add noise progressively                               │
+│   Image ──→ Noisy ──→ Noisier ──→ ... ──→ Pure Noise                       │
+│   🖼️         ░░░       ▒▒▒▒▒         ████████████                           │
+│                                                                             │
+│   REVERSE (Inference): Learn to denoise                                     │
+│   Pure Noise ──→ Less Noisy ──→ ... ──→ Image                              │
+│   ████████████    ▒▒▒▒▒▒▒▒▒▒       🖼️                                      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Parameters
+
+| Parameter | Description | Typical Values |
+|-----------|-------------|----------------|
+| `num_inference_steps` | Denoising iterations | 4 (turbo) to 50 (standard) |
+| `guidance_scale` | How closely to follow prompt (CFG) | 0.0 (turbo) to 7.5 (standard) |
+| `negative_prompt` | What to avoid in the image | "blurry, low quality" |
+| `width`, `height` | Output image dimensions | 1024×1024, 1664×928 |
+
+### Turbo vs Standard Models
+
+| Model Type | Steps | Guidance | Speed | Quality |
+|------------|-------|----------|-------|---------|
+| **Standard** (SDXL) | 20-50 | 7.5 | Slow | Highest |
+| **Turbo** (SD3.5 Turbo) | 4 | 0.0 | Fast | Excellent |
+
+**Why Turbo uses `guidance_scale=0.0`:** The model was *distilled* with guidance baked in. It already knows to follow prompts closely.
+
+### Stable Diffusion 3.5 Example
+
+```python
+import torch
+from diffusers import StableDiffusion3Pipeline
+
+# Load model (requires ~18GB VRAM for float16)
+pipe = StableDiffusion3Pipeline.from_pretrained(
+    "stabilityai/stable-diffusion-3.5-large-turbo", 
+    torch_dtype=torch.bfloat16,  # Use float16 for T4/older GPUs
+)
+pipe = pipe.to("cuda")
+
+# Generate image
+image = pipe(
+    "A cyberpunk city at sunset, neon lights",
+    num_inference_steps=4,    # Turbo = few steps
+    guidance_scale=0.0,       # Turbo = no CFG needed
+).images[0]
+
+image.save("cyberpunk.png")
+```
+
+### Memory Optimization
+
+```python
+# For smaller GPUs (12-16GB)
+pipe.enable_model_cpu_offload()
+
+# For very small GPUs (8-10GB)
+pipe.enable_sequential_cpu_offload()
+```
+
+### GPU Compatibility
+
+| GPU | bfloat16 Support | Recommendation |
+|-----|------------------|----------------|
+| T4, V100 | ❌ No | Use `torch.float16` |
+| A100, H100 | ✅ Yes | Use `torch.bfloat16` |
+| RTX 3090/4090 | ✅ Yes | Use `torch.bfloat16` |
+
+### Aspect Ratios
+
+```python
+aspect_ratios = {
+    "1:1": (1328, 1328),    # Square
+    "16:9": (1664, 928),    # Landscape/video
+    "9:16": (928, 1664),    # Portrait/mobile
+    "4:3": (1472, 1140),    # Classic photo
+    "3:2": (1584, 1056),    # DSLR ratio
+}
+
+width, height = aspect_ratios["16:9"]
+image = pipe(prompt, width=width, height=height, ...).images[0]
+```
+
+---
+
 ## Code Walkthrough
 
 ### File: `07_vllm_cuda_plus_tools.py`
@@ -561,6 +863,120 @@ outputs = llm_with_lora.generate(
 )
 ```
 
+### File: `08_deepseek_example.py`
+
+DeepSeek R1 reasoning model example:
+
+```python
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+# Load DeepSeek R1 (33B - needs large GPU or quantization)
+tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-33B")
+model = AutoModelForCausalLM.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-33B")
+
+# Use chat template for proper formatting
+messages = [{"role": "user", "content": "Who are you?"}]
+inputs = tokenizer.apply_chat_template(
+    messages,
+    add_generation_prompt=True,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="pt",
+).to(model.device)
+
+outputs = model.generate(**inputs, max_new_tokens=40)
+print(tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1]:]))
+
+# vLLM version (faster for production)
+from vllm import LLM, SamplingParams
+
+llm = LLM(
+    model="deepseek-ai/DeepSeek-R1-Distill-Qwen-33B",
+    enforce_eager=True,
+    gpu_memory_utilization=0.9,
+)
+
+params = SamplingParams(temperature=0.7, max_tokens=2000)
+outputs = llm.generate(["What are the symptoms of diabetes?"], params)
+print(outputs[0].outputs[0].text)
+```
+
+### File: `09_mistral_example.py`
+
+Large model (24B) with FP8 quantization:
+
+```python
+import os
+os.environ["VLLM_USE_V1"] = "0"  # Required for notebooks
+os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+
+from vllm import LLM, SamplingParams
+import gc, torch
+
+gc.collect()
+torch.cuda.empty_cache()
+
+# 24B model with FP8 quantization (fits in 40GB GPU)
+llm = LLM(
+    model="mistralai/Devstral-Small-2-24B-Instruct-2512",
+    enforce_eager=True,
+    gpu_memory_utilization=0.9,
+    max_model_len=4096,
+    dtype="float16",
+    quantization="fp8",
+)
+
+# Code generation with system prompt
+messages = [
+    {
+        "role": "system",
+        "content": "You are a Python code generator. Output ONLY code."
+    },
+    {"role": "user", "content": "Code to check if number is prime"}
+]
+
+params = SamplingParams(temperature=0.2, max_tokens=2500)
+outputs = llm.chat([messages], params)
+print(outputs[0].outputs[0].text)
+```
+
+### File: `10_diffuser_image.py`
+
+Image generation with Stable Diffusion 3.5 Turbo:
+
+```python
+import torch
+from diffusers import StableDiffusion3Pipeline
+
+# Load SD3.5 Turbo (requires bfloat16-capable GPU like A100/H100)
+pipe = StableDiffusion3Pipeline.from_pretrained(
+    "stabilityai/stable-diffusion-3.5-large-turbo", 
+    torch_dtype=torch.bfloat16
+)
+pipe = pipe.to("cuda")
+
+# Generate with turbo settings
+image = pipe(
+    "Korra from avatar series in real life",
+    num_inference_steps=4,   # Turbo needs only 4 steps
+    guidance_scale=0.0,      # CFG baked into turbo models
+).images[0]
+
+image.save("avatar.png")
+
+# For more control, use aspect ratios and seeds
+aspect_ratios = {"16:9": (1664, 928), "9:16": (928, 1664)}
+width, height = aspect_ratios["16:9"]
+
+image = pipe(
+    prompt="A coffee shop with neon signs",
+    width=width,
+    height=height,
+    num_inference_steps=50,  # More steps for non-turbo
+    generator=torch.Generator(device="cuda").manual_seed(42)
+).images[0]
+```
+
 ---
 
 ## GPU Recommendations
@@ -596,6 +1012,9 @@ outputs = llm_with_lora.generate(
 | **Notebooks** | Use `VLLM_USE_V1=0` and `enforce_eager=True` |
 | **Cloud** | SageMaker/ECS for AWS, Azure ML for Azure |
 | **Optimization** | Quantization, speculative decoding, flash attention |
+| **Reasoning Models** | DeepSeek R1 uses `<think>` tokens, needs 3000+ max_tokens |
+| **Large Models** | Use FP8/INT4 quantization to fit in smaller GPUs |
+| **Image Generation** | Diffusers library, turbo models use 4 steps + no CFG |
 
 ---
 
