@@ -23,4 +23,5 @@ dependencies = [
     "transformers>=4.57.3",
     "trl>=0.26.2",
     "uvicorn>=0.34.0",
+    "diffusers>=0.36.0",
 ]
